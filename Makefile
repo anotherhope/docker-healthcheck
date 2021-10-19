@@ -41,7 +41,7 @@ docker: docker-build ## Run project in container
 docker-build-debug: ## Build project in debug container
 	docker build --force-rm -t healthcheck/debug -f Dockerfile.debug .
 
-docker-debug: docker-build-debug ## Run project in debug container
+docker-debug: ## Run project in debug container
 	docker run -ti --name healthcheck --rm \
 		-v $$(pwd):/tmp/healthcheck \
 		-v build:/tmp/healthcheck/build \

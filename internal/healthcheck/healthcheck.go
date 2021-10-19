@@ -102,7 +102,13 @@ func Analyse(dockerCli command.Cli, targets []string, only bool) (*Data, error) 
 			data.Length[4] = len(healthcheck)
 		}
 
-		if only && healthcheck == "-" || !contains(targets, names) {
+		/*
+			if len(targets) > 0 && !contains(targets, names) {
+				return nil, fmt.Errorf("docker: Error target in for args %s not found", names)
+			}
+		*/
+
+		if (only && healthcheck == "-") || len(targets) > 0 && !contains(targets, names) {
 			continue
 		}
 
