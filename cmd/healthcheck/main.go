@@ -17,7 +17,7 @@ var filter []string
 var only bool
 var waithc string
 var wait bool
-var timeout int
+var timeout time.Duration
 
 func main() {
 	plugin.Run(func(dockerCli command.Cli) *cobra.Command {
@@ -93,7 +93,17 @@ func main() {
 		cmd.Flags().BoolVar(&wait, "wait", false, "Wait for all targeted containers")
 		cmd.Flags().BoolVar(&only, "only", false, "Display only available healthcheck")
 		cmd.Flags().StringSliceVarP(&filter, "filter", "f", nil, "Reduce containers to observe")
-		cmd.Flags().IntVarP(&timeout, "timeout", "t", 15, "Set timeout")
+		cmd.Flags().DurationVarP(&timeout, "timeout", "t", 0, "Set timeout")
+
+		if timeout > 0 {
+			time.AfterFunc(timeout*time.Second, func() {
+				if wait {
+					termbox.Close()
+				}
+				fmt.Println("docker: timeout exceeded")
+				os.Exit(1)
+			})
+		}
 
 		return cmd
 	}, manager.Metadata{
