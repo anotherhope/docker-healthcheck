@@ -2,45 +2,98 @@ package main
 
 import (
 	"fmt"
-	"strconv"
+	"os"
+	"time"
 
 	"github.com/anotherhope/docker-healthcheck/internal/healthcheck"
 	"github.com/docker/cli/cli-plugins/manager"
 	"github.com/docker/cli/cli-plugins/plugin"
 	"github.com/docker/cli/cli/command"
+	"github.com/nsf/termbox-go"
 	"github.com/spf13/cobra"
 )
 
-var targets []string
+var filter []string
 var only bool
+var waithc string
+var wait bool
+var timeout int
 
 func main() {
 	plugin.Run(func(dockerCli command.Cli) *cobra.Command {
 		cmd := &cobra.Command{
-			Use: "healthcheck ",
-			RunE: func(cmd *cobra.Command, args []string) error {
+			Short:   "Display healthcheck on container",
+			Example: "docker healthcheck --wait --filter CONTAINER_NAMES,CONTAINER_NAMES --only --timeout 10",
+			Args: func(cmd *cobra.Command, args []string) error {
+				if waithc != "" && !(waithc == "starting" || waithc == "healthy" || waithc == "unhealthy") {
+					return fmt.Errorf("docker: --waithc args is not valid (starting|healthy|unhealthy)")
+				}
 
-				data, err := healthcheck.Analyse(dockerCli, targets, only)
+				return nil
+			},
+			Use: "healthcheck",
+			RunE: func(cmd *cobra.Command, args []string) error {
+				hc, err := healthcheck.Analyse(dockerCli)
 				if err != nil {
 					return err
 				}
 
-				for _, line := range data.Lines {
-					fmt.Printf("%-"+strconv.Itoa(data.Length[0]+3)+"s"+
-						"%-"+strconv.Itoa(data.Length[1]+3)+"s"+
-						"%-"+strconv.Itoa(data.Length[2]+3)+"s"+
-						"%-"+strconv.Itoa(data.Length[3]+3)+"s"+
-						"%-"+strconv.Itoa(data.Length[4]+3)+"s"+
-						"\n", line[0], line[1], line[2], line[3], line[4],
-					)
+				if only {
+					hc = hc.Only()
+				}
+
+				if len(filter) > 0 {
+					hc, err = hc.Targets(filter)
+					if err != nil {
+						return err
+					}
+				}
+
+				if wait || waithc != "" {
+					err := termbox.Init()
+					if err != nil {
+						return err
+					}
+
+					exit := make(chan os.Signal, 1)
+
+					go func() {
+						for {
+							switch ev := termbox.PollEvent(); ev.Key {
+							case termbox.KeyCtrlC:
+								exit <- os.Interrupt
+							}
+						}
+					}()
+
+					go func() {
+						for {
+							for y, info := range hc.GetInfos() {
+								for x, c := range info.Print(hc.GetMeta()) {
+									termbox.SetCell(x, y, c, termbox.ColorWhite, termbox.ColorDefault)
+								}
+							}
+							termbox.Flush()
+							time.Sleep(1 * time.Second)
+						}
+					}()
+					<-exit
+					termbox.Close()
+				} else {
+					for _, info := range hc.GetInfos() {
+						fmt.Println(info.Print(hc.GetMeta()))
+					}
 				}
 
 				return nil
 			},
 		}
 
-		cmd.Flags().BoolVar(&only, "only", false, "Display only active healthcheck")
-		cmd.Flags().StringSliceVarP(&targets, "for", "f", nil, "Provide filter targets")
+		cmd.Flags().StringVar(&waithc, "healthcheck", "", "Wait for all targeted containers obtained (starting|healthy|unhealthy) healthcheck")
+		cmd.Flags().BoolVar(&wait, "wait", false, "Wait for all targeted containers")
+		cmd.Flags().BoolVar(&only, "only", false, "Display only available healthcheck")
+		cmd.Flags().StringSliceVarP(&filter, "filter", "f", nil, "Reduce containers to observe")
+		cmd.Flags().IntVarP(&timeout, "timeout", "t", 15, "Set timeout")
 
 		return cmd
 	}, manager.Metadata{
