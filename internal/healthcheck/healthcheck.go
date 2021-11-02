@@ -12,55 +12,50 @@ import (
 const pad int = 3
 
 type HealthCheck struct {
-	cli   client.APIClient
-	infos []*Info
-	meta  Meta
+	cli     client.APIClient
+	infos   []*Info
+	meta    Meta
+	targets []string
+	wait    bool
+	only    bool
 }
 
-func (hc *HealthCheck) Only() *HealthCheck {
-	infos := []*Info{}
-
-	for _, info := range hc.infos {
-		if info.healthCheck != "-" {
-			infos = append(infos, info)
-		}
-	}
-
-	hcn := &HealthCheck{
-		cli:   hc.cli,
-		infos: infos,
-	}
-
-	return hcn.updateMeta()
+func (hc *HealthCheck) SetOnly() {
+	hc.only = true
 }
 
-func (hc *HealthCheck) Targets(targets []string) (*HealthCheck, error) {
-	filter := targets
-	for i, info := range hc.infos {
-		index := find(filter, info.names)
-		if index != -1 && i != 0 {
-			filter = append(filter[:index], filter[index+1:]...)
+func (hc *HealthCheck) SetTargets(targets []string, wait bool) {
+	hc.targets = targets
+	hc.wait = wait
+}
+
+func (hc *HealthCheck) filter() error {
+	if len(hc.targets) > 0 {
+		filter := make([]string, len(hc.targets))
+		copy(filter, hc.targets)
+		for i, info := range hc.infos {
+			index := find(filter, info.names)
+			if index != -1 && i != 0 {
+				filter = append(filter[:index], filter[index+1:]...)
+			}
 		}
-	}
-
-	if len(filter) > 0 {
-		return nil, fmt.Errorf("docker: Error targets containers %v not found", filter)
-	}
-
-	infos := []*Info{}
-
-	for i, info := range hc.infos {
-		if contains(targets, info.names) || i == 0 {
-			infos = append(infos, info)
+		if len(filter) > 0 && !hc.wait {
+			hc.updateMeta()
+			return fmt.Errorf("docker: Error targets containers %v not found", filter)
 		}
+
+		infos := []*Info{}
+
+		for i, info := range hc.infos {
+			if contains(hc.targets, info.names) || i == 0 {
+				infos = append(infos, info)
+			}
+		}
+		hc.infos = infos
 	}
 
-	hcn := &HealthCheck{
-		cli:   hc.cli,
-		infos: infos,
-	}
-
-	return hcn.updateMeta(), nil
+	hc.updateMeta()
+	return nil
 }
 
 func find(a []string, x string) int {
@@ -81,7 +76,7 @@ func contains(a []string, x string) bool {
 	return false
 }
 
-func Analyse(dockerCli command.Cli) (*HealthCheck, error) {
+func Make(dockerCli command.Cli) *HealthCheck {
 	hc := &HealthCheck{
 		cli: dockerCli.Client(),
 		infos: []*Info{{
@@ -93,20 +88,23 @@ func Analyse(dockerCli command.Cli) (*HealthCheck, error) {
 		}},
 	}
 
-	return hc.refreshData()
+	return hc
 }
 
-func (hc *HealthCheck) refreshData() (*HealthCheck, error) {
+func (hc *HealthCheck) RefreshData() error {
 	containers, err := hc.cli.ContainerList(context.Background(), types.ContainerListOptions{})
 
 	if err != nil {
-		return nil, err
+		return err
 	}
+
+	hc.infos = hc.infos[:1]
+	hc.meta = Meta{}
 
 	for _, container := range containers {
 		inpected, err := hc.cli.ContainerInspect(context.Background(), container.ID)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		ir := &InfoRaw{
@@ -118,14 +116,30 @@ func (hc *HealthCheck) refreshData() (*HealthCheck, error) {
 		}
 
 		is := ir.ToString()
-		hc.infos = append(hc.infos, is)
+		if hc.only {
+			if ir.healthCheck != nil {
+				hc.infos = append(hc.infos, is)
+			}
+		} else {
+			hc.infos = append(hc.infos, is)
+		}
 	}
 
-	return hc.updateMeta(), nil
+	return hc.filter()
 }
 
-func (hc *HealthCheck) updateMeta() *HealthCheck {
+func (hc *HealthCheck) IsValid(healthCheck string) bool {
 
+	for _, info := range hc.infos {
+		if !info.HealthCheckIs(healthCheck) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (hc *HealthCheck) updateMeta() {
 	for _, i := range hc.infos {
 		if hc.meta.id < pad+len(i.id) {
 			hc.meta.id = pad + len(i.id)
@@ -147,8 +161,6 @@ func (hc *HealthCheck) updateMeta() *HealthCheck {
 			hc.meta.healthCheck = pad + len(i.healthCheck)
 		}
 	}
-
-	return hc
 }
 
 func (hc *HealthCheck) GetInfos() []*Info {
@@ -158,94 +170,3 @@ func (hc *HealthCheck) GetInfos() []*Info {
 func (hc *HealthCheck) GetMeta() Meta {
 	return hc.meta
 }
-
-/*
-
-type Data struct {
-	Lines  [][]string
-	Length []int
-}
-
-func Analyse(dockerCli command.Cli, targets []string, only bool) (*Data, error) {
-	cli := dockerCli.Client()
-	containers, err := cli.ContainerList(context.Background(), types.ContainerListOptions{})
-
-	if err != nil {
-		return nil, err
-	}
-
-	data := &Data{
-		Lines: [][]string{{
-			containerID,
-			containerNames,
-			containerImage,
-			containerStatus,
-			containerHealthCheck,
-		}},
-		Length: []int{
-			len(containerID),
-			len(containerNames),
-			len(containerImage),
-			len(containerStatus),
-			len(containerHealthCheck),
-		},
-	}
-
-	for _, container := range containers {
-		inpected, err := cli.ContainerInspect(context.Background(), container.ID)
-		if err != nil {
-			return nil, err
-		}
-
-		id := container.ID[0:12]
-		names := getCanonicalContainerName(container.Names)
-		image := container.Image
-		if strings.HasPrefix(image, "sha256:") {
-			image = image[7:19]
-		}
-		status := inpected.State.Status
-		healthcheck := "-"
-
-		if inpected.State.Health != nil {
-			healthcheck = inpected.State.Health.Status
-		}
-
-		if len(id) > data.Length[0] {
-			data.Length[0] = len(id)
-		}
-
-		if len(names) > data.Length[1] {
-			data.Length[1] = len(names)
-		}
-
-		if len(image) > data.Length[2] {
-			data.Length[2] = len(image)
-		}
-
-		if len(status) > data.Length[3] {
-			data.Length[3] = len(status)
-		}
-
-		if len(healthcheck) > data.Length[4] {
-			data.Length[4] = len(healthcheck)
-		}
-
-		if (only && healthcheck == "-") || len(targets) > 0 && !contains(targets, names) {
-			continue
-		}
-
-		data.Lines = append(
-			data.Lines,
-			[]string{
-				id,
-				names,
-				image,
-				status,
-				healthcheck,
-			},
-		)
-	}
-
-	return data, nil
-}
-*/

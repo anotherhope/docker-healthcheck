@@ -15,6 +15,14 @@ type Info struct {
 	healthCheck string
 }
 
+func (i *Info) HealthCheckIs(need string) bool {
+	return i.healthCheck == need
+}
+
+func (i *Info) GetHealthCheck() string {
+	return i.healthCheck
+}
+
 func (i *Info) Print(hcm Meta) string {
 	hcms := hcm.ToString()
 	return fmt.Sprintf("%-"+hcms.id+"s"+
